@@ -1,0 +1,245 @@
+
+
+import streamlit as st
+import pandas as pd
+import pymysql
+
+def main():
+    st.title("Data Upload and Processing App")
+
+    # Mostrar un widget de carga de archivo en la interfaz de usuario de Streamlit
+    csv_file = upload_csv()
+
+    if csv_file is not None:
+        # Mostrar un selector para elegir el tipo de datos
+        data_type = st.selectbox("Select the type of data to process:", ["Liga", "Equipos", "Partidos", "Jugadores", "Time Dimension"])
+
+        # Botón para iniciar el procesamiento de datos
+        if st.button("Process Data"):
+            process_data(csv_file, data_type)
+            st.success("Data processing initiated. Check the console for details.")
+
+def upload_csv():
+    uploaded_file = st.file_uploader("Elige un archivo CSV", type="csv")
+    if uploaded_file is not None:
+        st.success("Archivo subido con éxito!")
+    return uploaded_file
+
+def process_data(csv_file, data_type):
+    connection = connect_to_database()
+    if connection:
+        try:
+            df = pd.read_csv(csv_file, encoding='latin1')
+
+            if data_type == "Liga":
+                process_data_type_1(df, connection)
+            elif data_type == "Equipos":
+                process_data_type_2(df, connection)
+            elif data_type == "Partidos":
+                process_data_type_3(df, connection)
+            elif data_type == "Jugadores":
+                process_data_type_4(df, connection)
+            elif data_type == "Time Dimension":
+                process_data_type_time(df, connection)
+        finally:
+            connection.close()
+
+def process_data_type_1(df, connection):
+    try:
+        with connection.cursor() as cursor:
+            for index, row in df.iterrows():
+                insert_liga = """
+                    INSERT INTO Dim_Liga (Nombre, Temporada, Estado, Numero_Clubes, Total_Partidos, Partidos_Completados,
+                                          Promedio_Goles_Partido, Promedio_Goles_Local, Promedio_Goles_Visitante,
+                                          Porcentaje_BTTS, Porcentaje_Clean_Sheets)
+                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                    ON DUPLICATE KEY UPDATE
+                        Temporada = VALUES(Temporada),
+                        Estado = VALUES(Estado),
+                        Numero_Clubes = VALUES(Numero_Clubes),
+                        Total_Partidos = VALUES(Total_Partidos),
+                        Partidos_Completados = VALUES(Partidos_Completados),
+                        Promedio_Goles_Partido = VALUES(Promedio_Goles_Partido),
+                        Promedio_Goles_Local = VALUES(Promedio_Goles_Local),
+                        Promedio_Goles_Visitante = VALUES(Promedio_Goles_Visitante),
+                        Porcentaje_BTTS = VALUES(Porcentaje_BTTS),
+                        Porcentaje_Clean_Sheets = VALUES(Porcentaje_Clean_Sheets);
+                """
+                cursor.execute(insert_liga, (row['name'], row['season'], row['status'], row['number_of_clubs'],
+                                             row['total_matches'], row['matches_completed'], row['average_goals_per_match'],
+                                             row['average_scored_home_team'], row['average_scored_away_team'],
+                                             row['btts_percentage'], row['clean_sheets_percentage']))
+            connection.commit()
+            st.success("Datos de tipo 1 procesados y subidos exitosamente.")
+    except Exception as e:
+        print(f"Error processing Data 1: {e}")
+        connection.rollback()
+        st.error("Failed to process Data 1.")
+
+def process_data_type_2(df, connection):
+    try:
+        with connection.cursor() as cursor:
+            for index, row in df.iterrows():
+                insert_equipo = """
+                    INSERT INTO Dim_Equipo (Nombre_Equipo, País, Partidos_Jugados, Partidos_Ganados, Partidos_Empatados,
+                                            Partidos_Perdidos, Goles_Anotados, Goles_Concedidos, Porterías_Cero)
+                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
+                    ON DUPLICATE KEY UPDATE
+                        País = VALUES(País),
+                        Partidos_Jugados = VALUES(Partidos_Jugados),
+                        Partidos_Ganados = VALUES(Partidos_Ganados),
+                        Partidos_Empatados = VALUES(Partidos_Empatados),
+                        Partidos_Perdidos = VALUES(Partidos_Perdidos),
+                        Goles_Anotados = VALUES(Goles_Anotados),
+                        Goles_Concedidos = VALUES(Goles_Concedidos),
+                        Porterías_Cero = VALUES(Porterías_Cero);
+                """
+                cursor.execute(insert_equipo, (row['team_name'], row['country'], row['matches_played'], row['wins'],
+                                               row['draws'], row['losses'], row['goals_scored'], row['goals_conceded'],
+                                               row['clean_sheets']))
+            connection.commit()
+            st.success("Datos de tipo 2 procesados y subidos exitosamente.")
+    except Exception as e:
+        print(f"Error processing Data 2: {e}")
+        connection.rollback()
+        st.error("Failed to process Data 2.")
+
+
+def process_data_type_3(df, connection):
+    try:
+        # Convertir formato de fecha
+        df['date_GMT'] = pd.to_datetime(df['date_GMT'], format='%b %d %Y - %I:%M%p', errors='coerce').dt.strftime('%Y-%m-%d')
+        df = df.fillna('NULL')  # Manejar valores nulos
+        with connection.cursor() as cursor:
+            for index, row in df.iterrows():
+                # Usar Liga_ID = 1 por defecto
+                liga_id = 1
+
+                # Consultar ID del equipo local
+                cursor.execute("SELECT Equipo_ID FROM Dim_Equipo WHERE Nombre_Equipo LIKE %s", ('%' + row['home_team_name'] + '%',))
+                home_equipo_id = cursor.fetchone()
+                print(f"Consulta Equipo Local: SELECT Equipo_ID FROM Dim_Equipo WHERE Nombre_Equipo LIKE '%{row['home_team_name']}%'")
+                print(f"Resultado Equipo Local: {home_equipo_id}")
+
+                # Consultar ID del equipo visitante
+                cursor.execute("SELECT Equipo_ID FROM Dim_Equipo WHERE Nombre_Equipo LIKE %s", ('%' + row['away_team_name'] + '%',))
+                away_equipo_id = cursor.fetchone()
+                print(f"Consulta Equipo Visitante: SELECT Equipo_ID FROM Dim_Equipo WHERE Nombre_Equipo LIKE '%{row['away_team_name']}%'")
+                print(f"Resultado Equipo Visitante: {away_equipo_id}")
+
+                # Consultar ID del tiempo
+                cursor.execute("SELECT Tiempo_ID FROM Dim_Tiempo WHERE Fecha = %s", (row['date_GMT'],))
+                tiempo_id = cursor.fetchone()
+                print(f"Consulta Tiempo: SELECT Tiempo_ID FROM Dim_Tiempo WHERE Fecha = {row['date_GMT']}")
+                print(f"Resultado Tiempo: {tiempo_id}")
+
+                if home_equipo_id and away_equipo_id and tiempo_id:
+                    insert_partido = """
+                        INSERT INTO Hechos_Partidos (Liga_ID, Home_Equipo_ID, Away_Equipo_ID, Tiempo_ID, Estado,
+                                                     Asistencia, Árbitro, Goles_Home, Goles_Away, Posesión_Home,
+                                                     Posesión_Away)
+                        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                    """
+                    print(f"Insertando partido con valores: ({liga_id}, {home_equipo_id[0]}, {away_equipo_id[0]}, {tiempo_id[0]}, "
+                          f"{row['status']}, {row['attendance']}, {row['referee']}, {row['home_team_goal_count']}, "
+                          f"{row['away_team_goal_count']}, {row['home_team_possession']}, {row['away_team_possession']})")
+                    cursor.execute(insert_partido, (liga_id, home_equipo_id[0], away_equipo_id[0], tiempo_id[0],
+                                                    row['status'], row['attendance'], row['referee'],
+                                                    row['home_team_goal_count'], row['away_team_goal_count'],
+                                                    row['home_team_possession'], row['away_team_possession']))
+                else:
+                    print(f"No se pudo insertar el partido para la fila {index} debido a IDs nulos.")
+            connection.commit()
+            st.success("Datos de tipo 3 procesados y subidos exitosamente.")
+    except Exception as e:
+        print(f"Error processing Data 3: {e}")
+        connection.rollback()
+        st.error("Failed to process Data 3.")
+
+
+
+
+def process_data_type_4(df, connection):
+    try:
+        # Convertir formato de fecha
+        df['birthday'] = pd.to_datetime(df['birthday'], errors='coerce').dt.strftime('%Y-%m-%d')
+        df = df.fillna('NULL')  # Manejar valores nulos
+        with connection.cursor() as cursor:
+            for index, row in df.iterrows():
+                insert_jugador = """
+                    INSERT INTO Dim_Jugador (Nombre_Completo, Edad, Fecha_Nacimiento, Liga, Temporada, Posición,
+                                             Nacionalidad, Minutos_Jugados, Apariciones, Goles_Anotados, Asistencias,
+                                             Porterías_Cero)
+                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                    ON DUPLICATE KEY UPDATE
+                        Edad = VALUES(Edad),
+                        Fecha_Nacimiento = VALUES(Fecha_Nacimiento),
+                        Liga = VALUES(Liga),
+                        Temporada = VALUES(Temporada),
+                        Posición = VALUES(Posición),
+                        Nacionalidad = VALUES(Nacionalidad),
+                        Minutos_Jugados = VALUES(Minutos_Jugados),
+                        Apariciones = VALUES(Apariciones),
+                        Goles_Anotados = VALUES(Goles_Anotados),
+                        Asistencias = VALUES(Asistencias),
+                        Porterías_Cero = VALUES(Porterías_Cero);
+                """
+                cursor.execute(insert_jugador, (row['full_name'], row['age'], row['birthday'], row['league'],
+                                                row['season'], row['position'], row['nationality'],
+                                                row['minutes_played_overall'], row['appearances_overall'],
+                                                row['goals_overall'], row['assists_overall'], row['clean_sheets_overall']))
+            connection.commit()
+            st.success("Datos de tipo 4 procesados y subidos exitosamente.")
+    except Exception as e:
+        print(f"Error processing Data 4: {e}")
+        connection.rollback()
+        st.error("Failed to process Data 4.")
+
+def process_data_type_time(df, connection):
+    try:
+        df['date_GMT'] = pd.to_datetime(df['date_GMT'], format='%b %d %Y - %I:%M%p', errors='coerce').dt.strftime('%Y-%m-%d')
+        with connection.cursor() as cursor:
+            for index, row in df.iterrows():
+                timestamp = int(row['timestamp'])
+                date = row['date_GMT']
+                dia = pd.to_datetime(date).day
+                mes = pd.to_datetime(date).month
+                año = pd.to_datetime(date).year
+                insert_tiempo = """
+                    INSERT INTO Dim_Tiempo (Timestamp, Fecha, Día, Mes, Año)
+                    VALUES (%s, %s, %s, %s, %s)
+                    ON DUPLICATE KEY UPDATE
+                        Fecha = VALUES(Fecha),
+                        Día = VALUES(Día),
+                        Mes = VALUES(Mes),
+                        Año = VALUES(Año);
+                """
+                print(f"Insertando tiempo con valores: ({timestamp}, {date}, {dia}, {mes}, {año})")
+                cursor.execute(insert_tiempo, (timestamp, date, dia, mes, año))
+            connection.commit()
+            st.success("Dimensión de tiempo procesada y subida exitosamente.")
+    except Exception as e:
+        print(f"Error processing Time Dimension: {e}")
+        connection.rollback()
+        st.error("Failed to process Time Dimension.")
+
+
+def connect_to_database():
+    try:
+        # Configuración de la conexión a la base de datos
+        connection = pymysql.connect(
+            host='mysql-inteligenciadenegocios.alwaysdata.net',
+            port=3306,
+            user='367255_admin',
+            password='fajikej627',
+            database='inteligenciadenegocios_mysql_access',
+            connect_timeout=6000  # Tiempo de espera en segundos
+        )
+        print("Connected to database")
+        return connection
+    except pymysql.MySQLError as e:
+        print("Error connecting to database:", e)
+        return None
+
+if __name__ == "__main__":
+    main()
